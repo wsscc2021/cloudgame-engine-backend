@@ -48,6 +48,9 @@ def get_user(user_id):
 @user_bp.route("/<int:user_id>", methods=["PUT"])
 @admin_required
 def update_user(user_id):
+    if int(get_jwt_identity()) == user_id:
+        return error("자기 자신은 수정할 수 없습니다.", 403)
+
     user = db.session.get(User, user_id)
     if not user:
         return error("사용자를 찾을 수 없습니다.", 404)
@@ -56,6 +59,7 @@ def update_user(user_id):
 
     new_username = body.get("username", "").strip()
     new_password = body.get("password", "")
+    new_role = body.get("role", "").strip()
 
     if new_username and new_username != user.username:
         if User.query.filter_by(username=new_username).first():
@@ -65,20 +69,26 @@ def update_user(user_id):
     if new_password:
         user.set_password(new_password)
 
+    if new_role in ("admin", "user"):
+        user.role = new_role
+
     db.session.commit()
     return success(user.to_dict(), "사용자 정보가 수정되었습니다.")
 
 
 @user_bp.route("/<int:user_id>", methods=["DELETE"])
-@jwt_required()
+@admin_required
 def delete_user(user_id):
     current_user_id = int(get_jwt_identity())
-    if current_user_id != user_id:
-        return error("다른 사용자를 삭제할 수 없습니다.", 403)
+    if current_user_id == user_id:
+        return error("자기 자신은 삭제할 수 없습니다.", 403)
 
     user = db.session.get(User, user_id)
     if not user:
         return error("사용자를 찾을 수 없습니다.", 404)
+
+    if user.username == "administrator":
+        return error("administrator 계정은 삭제할 수 없습니다.", 403)
 
     db.session.delete(user)
     db.session.commit()
