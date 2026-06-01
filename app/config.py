@@ -24,3 +24,12 @@ class Config:
     )
 
     ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "Admin1234!")
+
+    # AWS_ACCESS_KEY_ID     = os.getenv("AWS_ACCESS_KEY_ID")
+    # AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+    AWS_REGION            = os.getenv("AWS_REGION", "ap-northeast-2")
+    EC2_AMI_ID            = os.getenv("EC2_AMI_ID")
+    EC2_INSTANCE_TYPE     = os.getenv("EC2_INSTANCE_TYPE", "t3.micro")
+    EC2_KEY_NAME          = os.getenv("EC2_KEY_NAME")
+    EC2_SECURITY_GROUP_ID = os.getenv("EC2_SECURITY_GROUP_ID")
+    EC2_SUBNET_ID         = os.getenv("EC2_SUBNET_ID")

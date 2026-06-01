@@ -15,9 +15,10 @@ def create_app():
     db.init_app(app)
     jwt.init_app(app)
 
-    from app.routes import auth_bp, user_bp
+    from app.routes import auth_bp, user_bp, ec2_bp
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(user_bp, url_prefix="/api/users")
+    app.register_blueprint(ec2_bp, url_prefix="/api/ec2")
 
     with app.app_context():
         db.create_all()
