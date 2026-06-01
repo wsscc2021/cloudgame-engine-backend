@@ -51,11 +51,17 @@ def list_instances():
 @admin_required
 def create_instance():
     body          = request.get_json(silent=True) or {}
-    user_id       = body.get("user_id") or None
+    user_ids      = body.get("user_ids") or []
     instance_type = body.get("instance_type") or current_app.config.get("EC2_INSTANCE_TYPE", "t3.micro")
 
-    if user_id and not db.session.get(User, int(user_id)):
-        return error("사용자를 찾을 수 없습니다.", 404)
+    if not user_ids:
+        return error("최소 한 명 이상의 사용자를 선택해야 합니다.", 400)
+
+    targets = [int(uid) for uid in user_ids]
+
+    for uid in targets:
+        if uid and not db.session.get(User, uid):
+            return error(f"사용자 ID {uid}를 찾을 수 없습니다.", 404)
 
     ami_id = current_app.config.get("EC2_AMI_ID")
     if not ami_id:
@@ -74,22 +80,36 @@ def create_instance():
     if current_app.config.get("EC2_SUBNET_ID"):
         params["SubnetId"] = current_app.config["EC2_SUBNET_ID"]
 
-    try:
-        resp         = _client().run_instances(**params)
-        aws_inst     = resp["Instances"][0]
-        record       = EC2Instance(
-            instance_id=aws_inst["InstanceId"],
-            instance_type=instance_type,
-            state=aws_inst["State"]["Name"],
-            user_id=user_id,
-        )
-        db.session.add(record)
-        db.session.commit()
-        return success(record.to_dict(), "인스턴스가 생성되었습니다.", 201)
-    except ClientError as e:
-        return error(e.response["Error"]["Message"], 500)
-    except Exception as e:
-        return error(str(e), 500)
+    created, failed = [], []
+    client = _client()
+
+    for uid in targets:
+        user = db.session.get(User, uid) if uid else None
+        username = user.username if user else None
+        try:
+            resp     = client.run_instances(**params)
+            aws_inst = resp["Instances"][0]
+            record   = EC2Instance(
+                instance_id=aws_inst["InstanceId"],
+                instance_type=instance_type,
+                state=aws_inst["State"]["Name"],
+                user_id=uid,
+            )
+            db.session.add(record)
+            db.session.commit()
+            created.append(record.to_dict())
+        except ClientError as e:
+            db.session.rollback()
+            failed.append({"user_id": uid, "username": username,
+                           "reason": e.response["Error"]["Message"]})
+        except Exception as e:
+            db.session.rollback()
+            failed.append({"user_id": uid, "username": username, "reason": str(e)})
+
+    return success(
+        {"created": created, "failed": failed},
+        f"{len(created)}개 성공, {len(failed)}개 실패",
+    )
 
 
 @ec2_bp.route("/<int:record_id>", methods=["DELETE"])
