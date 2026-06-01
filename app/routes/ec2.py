@@ -87,7 +87,14 @@ def create_instance():
         user = db.session.get(User, uid) if uid else None
         username = user.username if user else None
         try:
-            resp     = client.run_instances(**params)
+            run_params = {
+                **params,
+                "TagSpecifications": [{
+                    "ResourceType": "instance",
+                    "Tags": [{"Key": "Name", "Value": username or str(uid)}],
+                }],
+            }
+            resp     = client.run_instances(**run_params)
             aws_inst = resp["Instances"][0]
             record   = EC2Instance(
                 instance_id=aws_inst["InstanceId"],
