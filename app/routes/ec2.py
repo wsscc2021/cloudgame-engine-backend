@@ -1,3 +1,5 @@
+import logging
+
 from flask import Blueprint, request, current_app
 import boto3
 from botocore.exceptions import ClientError
@@ -5,6 +7,9 @@ from botocore.exceptions import ClientError
 from app import db
 from app.models import User, EC2Instance
 from app.utils import success, error, admin_required
+from app.utils.user_data import generate as generate_user_data
+
+log = logging.getLogger(__name__)
 
 ec2_bp = Blueprint("ec2", __name__)
 
@@ -24,16 +29,18 @@ def _sync_states(instances):
     try:
         ids = [i.instance_id for i in instances]
         resp = _client().describe_instances(InstanceIds=ids)
-        state_map, ip_map = {}, {}
+        state_map, pub_map, priv_map = {}, {}, {}
         for reservation in resp["Reservations"]:
             for inst in reservation["Instances"]:
                 iid = inst["InstanceId"]
                 state_map[iid] = inst["State"]["Name"]
-                ip_map[iid]    = inst.get("PublicIpAddress")
+                pub_map[iid]   = inst.get("PublicIpAddress")
+                priv_map[iid]  = inst.get("PrivateIpAddress")
         for inst in instances:
             if inst.instance_id in state_map:
-                inst.state     = state_map[inst.instance_id]
-                inst.public_ip = ip_map.get(inst.instance_id)
+                inst.state      = state_map[inst.instance_id]
+                inst.public_ip  = pub_map.get(inst.instance_id)
+                inst.private_ip = priv_map.get(inst.instance_id)
         db.session.commit()
     except Exception:
         pass
@@ -79,6 +86,13 @@ def create_instance():
         params["SecurityGroupIds"] = [current_app.config["EC2_SECURITY_GROUP_ID"]]
     if current_app.config.get("EC2_SUBNET_ID"):
         params["SubnetId"] = current_app.config["EC2_SUBNET_ID"]
+
+    try:
+        params["UserData"] = generate_user_data(
+            agent_port=current_app.config.get("AGENT_PORT", 7000)
+        )
+    except Exception as e:
+        log.warning("user data 생성 실패 (에이전트 없이 인스턴스 생성): %s", e)
 
     created, failed = [], []
     client = _client()

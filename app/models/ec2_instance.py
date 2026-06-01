@@ -10,6 +10,7 @@ class EC2Instance(db.Model):
     instance_type = db.Column(db.String(20), nullable=False)
     state         = db.Column(db.String(20), nullable=False, default="pending")
     public_ip     = db.Column(db.String(50), nullable=True)
+    private_ip    = db.Column(db.String(50), nullable=True)
     user_id       = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at    = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -22,6 +23,7 @@ class EC2Instance(db.Model):
             "instance_type": self.instance_type,
             "state":         self.state,
             "public_ip":     self.public_ip,
+            "private_ip":    self.private_ip,
             "user_id":       self.user_id,
             "username":      self.user.username if self.user else None,
             "created_at":    self.created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),

@@ -33,3 +33,6 @@ class Config:
     EC2_KEY_NAME          = os.getenv("EC2_KEY_NAME")
     EC2_SECURITY_GROUP_ID = os.getenv("EC2_SECURITY_GROUP_ID")
     EC2_SUBNET_ID         = os.getenv("EC2_SUBNET_ID")
+
+    AGENT_PORT     = int(os.getenv("AGENT_PORT", 7000))
+    LOADCLIENT_DIR = os.getenv("LOADCLIENT_DIR", "")
