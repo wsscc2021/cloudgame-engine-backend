@@ -1,5 +1,6 @@
 """Generates EC2 user data that installs and starts the load agent."""
 import base64
+import gzip
 import os
 
 
@@ -19,15 +20,15 @@ def _loadclient_dir() -> str:
     )
 
 
-def _b64(filename: str) -> str:
+def _b64gz(filename: str) -> str:
     path = os.path.join(_loadclient_dir(), filename)
     with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode()
+        return base64.b64encode(gzip.compress(f.read())).decode()
 
 
 def generate(agent_port: int = 7000) -> str:
-    load_b64  = _b64("load.py")
-    agent_b64 = _b64("agent.py")
+    load_b64  = _b64gz("load.py")
+    agent_b64 = _b64gz("agent.py")
 
     # printf 로 systemd service 파일 작성 (heredoc 이스케이프 문제 방지)
     svc = (
@@ -51,8 +52,8 @@ def generate(agent_port: int = 7000) -> str:
         "# 에이전트 디렉터리 생성\n"
         "mkdir -p /loadagent\n\n"
         "# 스크립트 배포\n"
-        f"echo '{load_b64}'  | base64 -d > /loadagent/load.py\n"
-        f"echo '{agent_b64}' | base64 -d > /loadagent/agent.py\n"
+        f"echo '{load_b64}'  | base64 -d | gunzip > /loadagent/load.py\n"
+        f"echo '{agent_b64}' | base64 -d | gunzip > /loadagent/agent.py\n"
         "chmod +x /loadagent/load.py /loadagent/agent.py\n\n"
         "# Python 의존성 설치\n"
         "pip3 install --quiet aiohttp flask\n\n"
