@@ -10,6 +10,7 @@ class User(db.Model):
     username = db.Column(db.String(50), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
     role = db.Column(db.String(20), nullable=False, default="user")
+    endpoint = db.Column(db.String(255), nullable=True, default=None)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(
         db.DateTime,
@@ -34,6 +35,7 @@ class User(db.Model):
             "id": self.id,
             "username": self.username,
             "role": self.role,
+            "endpoint": self.endpoint,
             "created_at": self.created_at.strftime('%Y-%m-%dT%H:%M:%SZ'),
             "updated_at": self.updated_at.strftime('%Y-%m-%dT%H:%M:%SZ'),
         }

@@ -93,3 +93,19 @@ def delete_user(user_id):
     db.session.delete(user)
     db.session.commit()
     return success(message="사용자가 삭제되었습니다.")
+
+
+@user_bp.route("/<int:user_id>/endpoint", methods=["PATCH"])
+@jwt_required()
+def update_endpoint(user_id):
+    if int(get_jwt_identity()) != user_id:
+        return error("자신의 endpoint만 수정할 수 있습니다.", 403)
+
+    user = db.session.get(User, user_id)
+    if not user:
+        return error("사용자를 찾을 수 없습니다.", 404)
+
+    body = request.get_json(silent=True) or {}
+    user.endpoint = body.get("endpoint") or None
+    db.session.commit()
+    return success(user.to_dict(), "endpoint가 수정되었습니다.")
