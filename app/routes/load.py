@@ -16,36 +16,14 @@ def _agent_url(private_ip: str, path: str, port: int) -> str:
     return f"http://{private_ip}:{port}{path}"
 
 
-def _log_payload(record_id: int) -> dict:
-    """에이전트에 전달할 로그 관련 필드. BACKEND_INTERNAL_URL 미설정 시 빈 dict."""
-    backend_url = current_app.config.get("BACKEND_INTERNAL_URL", "").rstrip("/")
-    if not backend_url:
-        current_app.logger.warning(
-            "BACKEND_INTERNAL_URL이 설정되지 않아 이벤트 로그를 수집하지 않습니다."
-        )
-        return {}
-    return {
-        "_log_url":   f"{backend_url}/api/load/{record_id}/logs",
-        "_log_token": current_app.config.get("INTERNAL_AGENT_TOKEN", ""),
-    }
-
-
 # ---------------------------------------------------------------------------
-# 이벤트 로그 수신 (load.py → 백엔드, 1초마다)
+# 공통 헬퍼
 # ---------------------------------------------------------------------------
 
-@load_bp.route("/<int:record_id>/logs", methods=["POST"])
-def ingest_logs(record_id):
-    body  = request.get_json(silent=True) or {}
-    token = current_app.config.get("INTERNAL_AGENT_TOKEN", "")
-
-    if token and body.get("token") != token:
-        return error("Unauthorized", 401)
-
-    events = body.get("events", [])
+def _save_events(record_id: int, events: list) -> int:
+    """events 리스트를 DB에 저장하고 저장된 건수를 반환."""
     if not events:
-        return success(message="0개 저장됨")
-
+        return 0
     records = []
     for ev in events:
         try:
@@ -59,16 +37,14 @@ def ingest_logs(record_id):
             ))
         except Exception:
             continue
-
     try:
         db.session.add_all(records)
         db.session.commit()
-    except Exception as e:
+        return len(records)
+    except Exception as exc:
         db.session.rollback()
-        current_app.logger.error("load_logs 저장 실패 (record_id=%s): %s", record_id, e)
-        return error("로그 저장 실패", 500)
-
-    return success(message=f"{len(records)}개 저장됨")
+        current_app.logger.error("이벤트 로그 저장 실패 (record_id=%s): %s", record_id, exc)
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +101,7 @@ def run(record_id):
 
     port = current_app.config.get("AGENT_PORT", 7000)
     body = request.get_json(silent=True) or {}
-    body.update({"url": inst.user.endpoint, **_log_payload(record_id)})
+    body["url"] = inst.user.endpoint
 
     try:
         resp = http.post(_agent_url(inst.private_ip, "/run", port), json=body, timeout=5)
@@ -181,7 +157,7 @@ def run_multi():
             _fail("사용자의 Endpoint가 설정되지 않았습니다.")
             continue
 
-        payload = {**body, "url": inst.user.endpoint, **_log_payload(record_id)}
+        payload = {**body, "url": inst.user.endpoint}
         try:
             resp = http.post(_agent_url(inst.private_ip, "/run", port), json=payload, timeout=5)
             data = resp.json()
@@ -222,10 +198,18 @@ def status(record_id):
     port = current_app.config.get("AGENT_PORT", 7000)
     try:
         resp = http.get(_agent_url(inst.private_ip, "/status", port), timeout=5)
-        return success(resp.json())
     except Timeout:
         return error("에이전트 연결 타임아웃", 504)
     except ConnectionError:
         return error("에이전트에 연결할 수 없습니다. 인스턴스가 실행 중인지 확인하세요.", 503)
     except Exception as e:
         return error(str(e), 503)
+
+    # 에이전트 이벤트 버퍼를 드레인해 DB에 저장
+    try:
+        ev_resp = http.get(_agent_url(inst.private_ip, "/events", port), timeout=5)
+        _save_events(record_id, ev_resp.json().get("events", []))
+    except Exception:
+        pass
+
+    return success(resp.json())
