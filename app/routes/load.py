@@ -44,6 +44,67 @@ def run(record_id):
         return error(str(e), 503)
 
 
+@load_bp.route("/run-multi", methods=["POST"])
+@admin_required
+def run_multi():
+    body       = request.get_json(silent=True) or {}
+    record_ids = body.pop("record_ids", [])
+
+    if not record_ids:
+        return error("인스턴스를 하나 이상 선택해주세요.", 400)
+
+    port = current_app.config.get("AGENT_PORT", 7000)
+    started, failed = [], []
+
+    for record_id in record_ids:
+        inst = db.session.get(EC2Instance, record_id)
+
+        def _fail(reason, inst=inst, record_id=record_id):
+            failed.append({
+                "id":          record_id,
+                "instance_id": inst.instance_id if inst else None,
+                "username":    inst.user.username if inst and inst.user else None,
+                "reason":      reason,
+            })
+
+        if not inst:
+            _fail("인스턴스를 찾을 수 없습니다.")
+            continue
+        if not inst.private_ip:
+            _fail("Private IP가 없습니다.")
+            continue
+        if not inst.user:
+            _fail("배정된 사용자가 없습니다.")
+            continue
+        if not inst.user.endpoint:
+            _fail("사용자의 Endpoint가 설정되지 않았습니다.")
+            continue
+
+        payload = {**body, "url": inst.user.endpoint}
+        try:
+            resp = http.post(_agent_url(inst.private_ip, "/run", port), json=payload, timeout=5)
+            data = resp.json()
+            if resp.status_code == 409:
+                _fail(data.get("message", "이미 실행 중입니다."))
+            else:
+                started.append({
+                    "id":          record_id,
+                    "instance_id": inst.instance_id,
+                    "username":    inst.user.username,
+                })
+        except Timeout:
+            _fail("에이전트 연결 타임아웃")
+        except ConnectionError:
+            _fail("에이전트에 연결할 수 없습니다.")
+        except Exception as e:
+            _fail(str(e))
+
+    return success(
+        {"started": started, "failed": failed},
+        f"{len(started)}개 시작, {len(failed)}개 실패",
+    )
+
+
 @load_bp.route("/<int:record_id>/status", methods=["GET"])
 @admin_required
 def status(record_id):
