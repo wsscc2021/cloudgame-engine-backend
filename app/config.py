@@ -34,5 +34,7 @@ class Config:
     EC2_SECURITY_GROUP_ID = os.getenv("EC2_SECURITY_GROUP_ID")
     EC2_SUBNET_ID         = os.getenv("EC2_SUBNET_ID")
 
-    AGENT_PORT     = int(os.getenv("AGENT_PORT", 7000))
-    LOADCLIENT_DIR = os.getenv("LOADCLIENT_DIR", "")
+    AGENT_PORT            = int(os.getenv("AGENT_PORT", 7000))
+    LOADCLIENT_DIR        = os.getenv("LOADCLIENT_DIR", "")
+    BACKEND_INTERNAL_URL  = os.getenv("BACKEND_INTERNAL_URL", "")
+    INTERNAL_AGENT_TOKEN  = os.getenv("INTERNAL_AGENT_TOKEN", "")

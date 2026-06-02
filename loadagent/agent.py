@@ -84,6 +84,9 @@ def run():
         cmd += ["--query", str(body["query"])]
     for h in body.get("headers", []):
         cmd += ["--header", str(h)]
+    if body.get("_log_url"):
+        cmd += ["--log-url",   str(body["_log_url"])]
+        cmd += ["--log-token", str(body.get("_log_token", ""))]
 
     threading.Thread(target=_execute, args=(cmd,), daemon=True).start()
     return jsonify({"success": True, "message": "테스트가 시작되었습니다."})

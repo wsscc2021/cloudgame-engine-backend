@@ -39,37 +39,103 @@ async def send_one(
 
 
 # ---------------------------------------------------------------------------
+# 이벤트 로그 드레인 (1초마다 백엔드로 전송)
+# ---------------------------------------------------------------------------
+
+async def _drain_loop(
+    queue: asyncio.Queue,
+    stop_evt: asyncio.Event,
+    log_url: str,
+    log_token: str,
+):
+    async with aiohttp.ClientSession() as log_sess:
+        while not stop_evt.is_set():
+            await asyncio.sleep(1)
+            await _flush(queue, log_sess, log_url, log_token)
+        await _flush(queue, log_sess, log_url, log_token)  # 종료 후 잔여 전송
+
+
+async def _flush(
+    queue: asyncio.Queue,
+    log_sess: aiohttp.ClientSession,
+    log_url: str,
+    log_token: str,
+):
+    events = []
+    while True:
+        try:
+            events.append(queue.get_nowait())
+        except asyncio.QueueEmpty:
+            break
+    if not events:
+        return
+    try:
+        await log_sess.post(
+            log_url,
+            json={"token": log_token, "events": events},
+            timeout=aiohttp.ClientTimeout(total=3),
+        )
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # 부하 루프
 # ---------------------------------------------------------------------------
 
 async def progress_printer(start: float, duration: int, interval: float = 5.0):
-    """테스트 진행 상황을 주기적으로 출력한다."""
     while True:
         await asyncio.sleep(interval)
-        elapsed = time.perf_counter() - start
+        elapsed   = time.perf_counter() - start
         remaining = max(0.0, duration - elapsed)
         if remaining == 0:
             break
         print(f"  경과 {elapsed:.0f}s / 남은 시간 {remaining:.0f}s ...", flush=True)
 
 
-async def run(method: str, url: str, headers: dict, body,
-              rps: int, duration: int, timeout: float):
-    interval = 1.0 / rps
-    results = []
-    tasks = []
+async def run(
+    method: str,
+    url: str,
+    headers: dict,
+    body,
+    rps: int,
+    duration: int,
+    timeout: float,
+    log_url: str = None,
+    log_token: str = "",
+):
+    interval    = 1.0 / rps
+    results     = []
+    tasks       = []
+    event_queue = asyncio.Queue() if log_url else None
+    stop_evt    = asyncio.Event()
+
+    # 이벤트를 큐에 쌓는 래퍼
+    async def _tracked(sess, m, u, h, b, to):
+        t_wall = time.time()
+        result = await send_one(sess, m, u, h, b, to)
+        if event_queue is not None:
+            s, l, e = result
+            await event_queue.put({
+                "t": round(t_wall, 3),
+                "s": s,
+                "l": round(l * 1000, 2),
+                "e": e,
+            })
+        return result
 
     connector = aiohttp.TCPConnector(limit=0, ttl_dns_cache=300)
     async with aiohttp.ClientSession(connector=connector) as session:
         wall_start = time.perf_counter()
-        loop = asyncio.get_event_loop()
+        loop       = asyncio.get_event_loop()
         loop_start = loop.time()
-        end_at = loop_start + duration
-        next_at = loop_start
+        end_at     = loop_start + duration
+        next_at    = loop_start
 
-        printer = asyncio.create_task(
-            progress_printer(wall_start, duration)
-        )
+        printer    = asyncio.create_task(progress_printer(wall_start, duration))
+        drain_task = asyncio.create_task(
+            _drain_loop(event_queue, stop_evt, log_url, log_token)
+        ) if event_queue is not None else None
 
         while True:
             now = loop.time()
@@ -77,10 +143,9 @@ async def run(method: str, url: str, headers: dict, body,
                 break
             if now >= next_at:
                 tasks.append(asyncio.create_task(
-                    send_one(session, method, url, headers, body, timeout)
+                    _tracked(session, method, url, headers, body, timeout)
                 ))
                 next_at += interval
-                # 부하가 커서 뒤처지는 경우 다음 틱으로 리셋
                 if next_at < now:
                     next_at = now + interval
             else:
@@ -96,6 +161,11 @@ async def run(method: str, url: str, headers: dict, body,
                     results.append((None, 0.0, str(r)))
                 else:
                     results.append(r)
+
+    # 드레인 종료
+    stop_evt.set()
+    if drain_task:
+        await drain_task
 
     return results
 
@@ -118,7 +188,6 @@ def print_summary(results: list, actual_duration: float):
         idx = min(int(len(latencies) * p / 100), len(latencies) - 1)
         return latencies[idx]
 
-    # 상태 코드 / 오류 분포
     status_dist: dict[int, int] = {}
     error_dist:  dict[str, int] = {}
     for s, _, e in results:
@@ -170,54 +239,25 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="HTTP 부하 테스트 클라이언트",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-예시:
-  # GET 요청, 초당 50건, 30초
-  python load.py --url http://localhost:5000 --path /api/users \\
-      --rps 50 --duration 30
-
-  # POST 로그인, JWT 발급 부하
-  python load.py --url http://localhost:5000 --path /api/auth/login \\
-      --method POST --rps 20 --duration 60 --timeout 5 \\
-      --body '{"username":"test","password":"Test1234!"}'
-
-  # 인증 헤더 포함 GET
-  python load.py --url http://localhost:5000 --path /api/ec2 \\
-      --rps 10 --duration 10 \\
-      --header "Authorization:Bearer <TOKEN>"
-
-  # 쿼리 스트링
-  python load.py --url http://localhost:5000 --path /api/users \\
-      --query "role=user&page=1" --rps 30 --duration 20
-        """,
     )
-    p.add_argument("--url",      required=True,
-                   help="베이스 URL (예: http://localhost:5000)")
-    p.add_argument("--path",     default="/",
-                   help="요청 경로 (기본: /)")
-    p.add_argument("--method",   default="GET",
-                   choices=["GET", "POST", "PUT", "PATCH", "DELETE"],
-                   help="HTTP 메서드 (기본: GET)")
-    p.add_argument("--rps",      type=int,   default=10,
-                   help="초당 요청 수 (기본: 10)")
-    p.add_argument("--duration", type=int,   default=10,
-                   help="테스트 시간 (초, 기본: 10)")
-    p.add_argument("--timeout",  type=float, default=10.0,
-                   help="요청 타임아웃 (초, 기본: 10)")
-    p.add_argument("--body",     default=None,
-                   help="요청 바디 JSON 문자열 (예: '{\"key\":\"value\"}')")
-    p.add_argument("--query",    default="",
-                   help="쿼리 스트링 (예: key=value&key2=value2)")
-    p.add_argument("--header",   action="append", default=[],
-                   metavar="KEY:VALUE",
-                   help="추가 헤더 (반복 가능, 예: --header Authorization:Bearer TOKEN)")
+    p.add_argument("--url",       required=True)
+    p.add_argument("--path",      default="/")
+    p.add_argument("--method",    default="GET",
+                   choices=["GET", "POST", "PUT", "PATCH", "DELETE"])
+    p.add_argument("--rps",       type=int,   default=10)
+    p.add_argument("--duration",  type=int,   default=10)
+    p.add_argument("--timeout",   type=float, default=10.0)
+    p.add_argument("--body",      default=None)
+    p.add_argument("--query",     default="")
+    p.add_argument("--header",    action="append", default=[], metavar="KEY:VALUE")
+    p.add_argument("--log-url",   default=None,  help="이벤트 로그를 전송할 백엔드 URL")
+    p.add_argument("--log-token", default="",    help="백엔드 인증 토큰")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
 
-    # 요청 바디 파싱
     body = None
     if args.body:
         try:
@@ -226,7 +266,6 @@ def main():
             print(f"오류: --body 가 유효한 JSON이 아닙니다 — {e}", file=sys.stderr)
             sys.exit(1)
 
-    # 헤더 파싱
     headers: dict[str, str] = {}
     if body is not None:
         headers["Content-Type"] = "application/json"
@@ -239,7 +278,6 @@ def main():
 
     url = build_url(args.url, args.path, args.query)
 
-    # 실행 정보 출력
     print(f"URL      : {url}")
     print(f"Method   : {args.method}")
     print(f"RPS      : {args.rps}")
@@ -247,11 +285,6 @@ def main():
     print(f"Timeout  : {args.timeout}s")
     if body is not None:
         print(f"Body     : {json.dumps(body, ensure_ascii=False)}")
-    if headers:
-        for k, v in headers.items():
-            if k.lower() == "authorization":
-                v = v[:12] + "..." if len(v) > 12 else v
-            print(f"Header   : {k}: {v}")
     print("\n테스트 시작...\n")
 
     t_start = time.perf_counter()
@@ -263,6 +296,8 @@ def main():
         rps=args.rps,
         duration=args.duration,
         timeout=args.timeout,
+        log_url=args.log_url,
+        log_token=args.log_token,
     ))
     actual_duration = time.perf_counter() - t_start
 
