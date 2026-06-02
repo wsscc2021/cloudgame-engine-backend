@@ -20,6 +20,9 @@ def _log_payload(record_id: int) -> dict:
     """에이전트에 전달할 로그 관련 필드. BACKEND_INTERNAL_URL 미설정 시 빈 dict."""
     backend_url = current_app.config.get("BACKEND_INTERNAL_URL", "").rstrip("/")
     if not backend_url:
+        current_app.logger.warning(
+            "BACKEND_INTERNAL_URL이 설정되지 않아 이벤트 로그를 수집하지 않습니다."
+        )
         return {}
     return {
         "_log_url":   f"{backend_url}/api/load/{record_id}/logs",
@@ -57,9 +60,50 @@ def ingest_logs(record_id):
         except Exception:
             continue
 
-    db.session.add_all(records)
-    db.session.commit()
+    try:
+        db.session.add_all(records)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error("load_logs 저장 실패 (record_id=%s): %s", record_id, e)
+        return error("로그 저장 실패", 500)
+
     return success(message=f"{len(records)}개 저장됨")
+
+
+# ---------------------------------------------------------------------------
+# 이벤트 로그 조회
+# ---------------------------------------------------------------------------
+
+@load_bp.route("/<int:record_id>/logs", methods=["GET"])
+@admin_required
+def get_logs(record_id):
+    limit  = min(int(request.args.get("limit", 200)), 1000)
+    offset = int(request.args.get("offset", 0))
+
+    rows = (
+        LoadLog.query
+        .filter_by(ec2_instance_id=record_id)
+        .order_by(LoadLog.occurred_at.desc())
+        .limit(limit)
+        .offset(offset)
+        .all()
+    )
+    total = LoadLog.query.filter_by(ec2_instance_id=record_id).count()
+
+    return success({
+        "total": total,
+        "logs": [
+            {
+                "id":          r.id,
+                "occurred_at": r.occurred_at.isoformat(),
+                "status_code": r.status_code,
+                "latency_ms":  r.latency_ms,
+                "error":       r.error,
+            }
+            for r in rows
+        ],
+    })
 
 
 # ---------------------------------------------------------------------------
