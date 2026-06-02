@@ -22,9 +22,14 @@ def run(record_id):
         return error("인스턴스를 찾을 수 없습니다.", 404)
     if not inst.private_ip:
         return error("Private IP가 없습니다. 인스턴스가 실행 중인지 확인하세요.", 503)
+    if not inst.user:
+        return error("인스턴스에 배정된 사용자가 없습니다.", 400)
+    if not inst.user.endpoint:
+        return error("사용자의 Endpoint가 설정되지 않았습니다.", 400)
 
     port = current_app.config.get("AGENT_PORT", 7000)
     body = request.get_json(silent=True) or {}
+    body["url"] = inst.user.endpoint
     try:
         resp = http.post(_agent_url(inst.private_ip, "/run", port), json=body, timeout=5)
         data = resp.json()
