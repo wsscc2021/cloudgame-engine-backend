@@ -30,12 +30,13 @@ async def send_one(
         if body is not None:
             kwargs["json"] = body
         async with session.request(method, url, **kwargs) as resp:
-            await resp.read()
-            return resp.status, time.perf_counter() - t0, None
+            raw = await resp.read()
+            resp_body = raw.decode("utf-8", errors="replace")[:500]
+            return resp.status, time.perf_counter() - t0, None, resp_body
     except asyncio.TimeoutError:
-        return None, time.perf_counter() - t0, "timeout"
+        return None, time.perf_counter() - t0, "timeout", None
     except Exception as e:
-        return None, time.perf_counter() - t0, type(e).__name__
+        return None, time.perf_counter() - t0, type(e).__name__, None
 
 
 # ---------------------------------------------------------------------------
@@ -113,16 +114,16 @@ async def run(
     # 이벤트를 큐에 쌓는 래퍼
     async def _tracked(sess, m, u, h, b, to):
         t_wall = time.time()
-        result = await send_one(sess, m, u, h, b, to)
+        s, l, e, rb = await send_one(sess, m, u, h, b, to)
         if event_queue is not None:
-            s, l, e = result
             await event_queue.put({
-                "t": round(t_wall, 3),
-                "s": s,
-                "l": round(l * 1000, 2),
-                "e": e,
+                "t":  round(t_wall, 3),
+                "s":  s,
+                "l":  round(l * 1000, 2),
+                "e":  e,
+                "rb": rb,
             })
-        return result
+        return s, l, e
 
     connector = aiohttp.TCPConnector(limit=0, ttl_dns_cache=300)
     async with aiohttp.ClientSession(connector=connector) as session:

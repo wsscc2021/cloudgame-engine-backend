@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 from flask import Blueprint, request, current_app
@@ -20,20 +21,39 @@ def _agent_url(private_ip: str, path: str, port: int) -> str:
 # 공통 헬퍼
 # ---------------------------------------------------------------------------
 
-def _save_events(record_id: int, events: list) -> int:
+def _save_events(record_id: int, events: list, meta=None) -> int:
     """events 리스트를 DB에 저장하고 저장된 건수를 반환."""
     if not events:
         return 0
+
+    inst     = db.session.get(EC2Instance, record_id)
+    user_id  = inst.user_id       if inst else None
+    endpoint = inst.user.endpoint if inst and inst.user else None
+
+    meta        = meta or {}
+    path        = (meta.get("path")   or "")[:500]
+    method      = (meta.get("method") or "")[:10]
+    querystring = (meta.get("query")  or "")[:500]
+    req_body    = meta.get("body")
+    request_body = json.dumps(req_body, ensure_ascii=False)[:500] if req_body else None
+
     records = []
     for ev in events:
         try:
             occurred_at = datetime.fromtimestamp(ev["t"], tz=timezone.utc).replace(tzinfo=None)
             records.append(LoadLog(
                 ec2_instance_id=record_id,
+                user_id=user_id,
                 occurred_at=occurred_at,
                 status_code=ev.get("s"),
                 latency_ms=float(ev.get("l", 0)),
                 error=str(ev["e"])[:120] if ev.get("e") else None,
+                endpoint=endpoint,
+                path=path,
+                method=method,
+                querystring=querystring,
+                request_body=request_body,
+                response_body=ev.get("rb"),
             ))
         except Exception:
             continue
@@ -71,11 +91,18 @@ def get_logs(record_id):
         "total": total,
         "logs": [
             {
-                "id":          r.id,
-                "occurred_at": r.occurred_at.isoformat(),
-                "status_code": r.status_code,
-                "latency_ms":  r.latency_ms,
-                "error":       r.error,
+                "id":           r.id,
+                "occurred_at":  r.occurred_at.isoformat(),
+                "status_code":  r.status_code,
+                "latency_ms":   r.latency_ms,
+                "error":        r.error,
+                "user_id":      r.user_id,
+                "endpoint":     r.endpoint,
+                "path":         r.path,
+                "method":       r.method,
+                "querystring":  r.querystring,
+                "request_body": r.request_body,
+                "response_body":r.response_body,
             }
             for r in rows
         ],
@@ -208,7 +235,8 @@ def status(record_id):
     # 에이전트 이벤트 버퍼를 드레인해 DB에 저장
     try:
         ev_resp = http.get(_agent_url(inst.private_ip, "/events", port), timeout=5)
-        _save_events(record_id, ev_resp.json().get("events", []))
+        ev_data = ev_resp.json()
+        _save_events(record_id, ev_data.get("events", []), ev_data.get("meta"))
     except Exception:
         pass
 

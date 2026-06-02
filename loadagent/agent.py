@@ -23,7 +23,8 @@ _state = {
 }
 
 _event_lock   = threading.Lock()
-_event_buffer = []  # load.py 가 1초마다 적재, 백엔드가 /events 로 드레인
+_event_buffer = []   # load.py 가 1초마다 적재, 백엔드가 /events 로 드레인
+_test_meta    = {}   # 현재/최근 테스트 파라미터 (백엔드가 /events 와 함께 수신)
 
 
 def _execute(cmd: list) -> None:
@@ -74,11 +75,12 @@ def drain_events():
     with _event_lock:
         events = list(_event_buffer)
         _event_buffer.clear()
-    return jsonify({"success": True, "events": events})
+    return jsonify({"success": True, "events": events, "meta": dict(_test_meta)})
 
 
 @app.route("/run", methods=["POST"])
 def run():
+    global _test_meta
     body = request.get_json(silent=True) or {}
     with _lock:
         if _state["running"]:
@@ -90,6 +92,14 @@ def run():
             "output":      None,
             "error":       None,
         })
+
+    _test_meta = {
+        "url":    body.get("url", ""),
+        "path":   body.get("path", "/"),
+        "method": body.get("method", "GET"),
+        "body":   body.get("body"),
+        "query":  body.get("query", ""),
+    }
 
     cmd = [
         "python3", SCRIPT,
