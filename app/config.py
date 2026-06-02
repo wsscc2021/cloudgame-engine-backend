@@ -38,3 +38,6 @@ class Config:
     LOADCLIENT_DIR        = os.getenv("LOADCLIENT_DIR", "")
     BACKEND_INTERNAL_URL  = os.getenv("BACKEND_INTERNAL_URL", "")
     INTERNAL_AGENT_TOKEN  = os.getenv("INTERNAL_AGENT_TOKEN", "")
+
+    LOG_DIR   = os.getenv("LOG_DIR",   "/var/log/cloudgame/backend")
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

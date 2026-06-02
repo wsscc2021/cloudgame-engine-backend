@@ -1,3 +1,7 @@
+import logging
+import os
+from logging.handlers import WatchedFileHandler
+
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager
@@ -11,6 +15,8 @@ jwt = JWTManager()
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
+
+    _configure_logging(app)
 
     db.init_app(app)
     jwt.init_app(app)
@@ -26,6 +32,31 @@ def create_app():
         _seed_admin(app)
 
     return app
+
+
+def _configure_logging(app):
+    log_dir = app.config.get("LOG_DIR", "/var/log/cloudgame")
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except OSError:
+        return
+
+    level = getattr(logging, app.config.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
+    fmt = logging.Formatter(
+        fmt="%(asctime)s %(levelname)-8s %(name)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+
+    handler = WatchedFileHandler(os.path.join(log_dir, "app.log"), encoding="utf-8")
+    handler.setFormatter(fmt)
+    handler.setLevel(level)
+
+    root = logging.getLogger()
+    root.setLevel(level)
+    root.addHandler(handler)
+
+    # werkzeug request logs go to Gunicorn's access.log instead
+    logging.getLogger("werkzeug").propagate = False
 
 
 def _seed_admin(app):
